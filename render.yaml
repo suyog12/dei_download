@@ -1,0 +1,78 @@
+# Render Blueprint for the DEI Downloader.
+#
+# Deploys two services from one repo:
+#   1. dei-downloader-api: FastAPI backend (Python Web Service, free tier)
+#   2. dei-downloader-web: React frontend (Static Site, free tier)
+#
+# On first deploy Render will create both services. The `fromService` block
+# wires the frontend's VITE_API_BASE to the backend's public URL automatically,
+# and the backend's CORS_ORIGINS gets the frontend's URL. No manual URL copying.
+#
+# See DEPLOY.md for the click-by-click setup.
+
+services:
+  # ------------------------------------------------------------------
+  # Backend - FastAPI served by Uvicorn
+  # ------------------------------------------------------------------
+  - type: web
+    name: dei-downloader-api
+    runtime: python
+    plan: free
+    region: oregon  # change if you prefer (frankfurt, singapore, ohio, virginia)
+    rootDir: backend
+    # Python 3.12 matches what we test against
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.3
+      - key: DEI_MIN_YEAR
+        value: "2000"
+      - key: DEI_MAX_YEAR
+        value: "2026"
+      # CORS_ORIGINS is populated from the frontend service's URL below.
+      # This is a Render feature: `fromService` pulls the hostname at deploy
+      # time so we never hardcode URLs.
+      - key: CORS_ORIGINS
+        fromService:
+          type: web
+          name: dei-downloader-web
+          property: hostport
+    # Free-tier services sleep after 15 min of inactivity; first request
+    # after sleep takes ~30-60s to cold-start. That's acceptable for a
+    # portfolio demo but upgrade to Starter ($7/mo) if you want zero sleep.
+
+  # ------------------------------------------------------------------
+  # Frontend - Vite build served as static files
+  # ------------------------------------------------------------------
+  - type: web
+    name: dei-downloader-web
+    runtime: static
+    plan: free
+    rootDir: frontend
+    buildCommand: npm ci && npm run build
+    staticPublishPath: ./dist
+    # SPA routing: all paths fall through to index.html so React handles them
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      # VITE_API_BASE is baked into the JS bundle at build time. Vite replaces
+      # import.meta.env.VITE_API_BASE with this value during `npm run build`.
+      # fromService gets the public URL of the API service deployed above.
+      - key: VITE_API_BASE
+        fromService:
+          type: web
+          name: dei-downloader-api
+          property: hostport
+    # Cache long-hashed assets aggressively; don't cache index.html so that
+    # deploys are picked up immediately.
+    headers:
+      - path: /assets/*
+        name: Cache-Control
+        value: public, max-age=31536000, immutable
+      - path: /index.html
+        name: Cache-Control
+        value: no-cache, no-store, must-revalidate

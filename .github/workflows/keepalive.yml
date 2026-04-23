@@ -1,0 +1,49 @@
+name: Keep Render backend awake
+
+# Render's free tier sleeps a Web Service after 15 minutes of inactivity.
+# First request after sleep takes 30-60s for cold start. This workflow
+# pings /api/health every ~10 minutes so visitors never hit a cold backend.
+#
+# Setup:
+#   1. In GitHub repo: Settings -> Secrets and variables -> Actions -> Variables
+#   2. Click "New repository variable"
+#   3. Name: RENDER_API_URL
+#      Value: https://dei-downloader-api.onrender.com
+#   4. Commit this file to main — the schedule starts automatically.
+#
+# GitHub Actions cron is best-effort; actual interval may drift 10-15 min
+# during high load. That's fine — the retry logic covers the rare gap.
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'  # every 10 minutes
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Ping health endpoint
+        env:
+          API_URL: ${{ vars.RENDER_API_URL }}
+        run: |
+          if [ -z "$API_URL" ]; then
+            echo "::error::RENDER_API_URL variable is not set."
+            echo "Go to repo Settings -> Secrets and variables -> Actions -> Variables"
+            exit 1
+          fi
+
+          echo "Pinging ${API_URL}/api/health"
+          for attempt in 1 2 3; do
+            if curl -sS -f --max-time 90 "${API_URL}/api/health"; then
+              echo ""
+              echo "Success on attempt $attempt"
+              exit 0
+            fi
+            echo "Attempt $attempt failed, retrying in 10s..."
+            sleep 10
+          done
+
+          echo "::error::All ping attempts failed — backend may be down"
+          exit 1

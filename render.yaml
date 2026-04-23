@@ -4,13 +4,12 @@
 #   1. dei-downloader-api: FastAPI backend (Python Web Service, free tier)
 #   2. dei-downloader-web: React frontend (Static Site - always free on Render)
 #
-# Important Render-specific quirks reflected below:
-#   - Static sites are NOT priced by plan tier. Render rejects `plan: free`
-#     for static sites. We simply omit the field.
+# Render quirks reflected below:
+#   - Static sites don't accept a `plan:` field. We omit it.
 #   - Static sites use `runtime: static`. Web services use `runtime: python`.
-#     The `type:` field is `web` for both (Render's naming, not ours).
-#   - For a static site to reference the backend URL at build time, we use
-#     `fromService: property: host` (not `hostport` — that field is rejected).
+#   - Use `property: hostport` (not `host`) so cross-service env refs get the
+#     full FQDN like "dei-downloader-api.onrender.com" instead of the bare
+#     service name. `host` alone produces non-resolvable URLs.
 
 services:
   # ------------------------------------------------------------------
@@ -20,7 +19,7 @@ services:
     name: dei-downloader-api
     runtime: python
     plan: free
-    region: oregon  # change if you prefer (frankfurt, singapore, ohio, virginia)
+    region: oregon
     rootDir: backend
     buildCommand: pip install --upgrade pip && pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
@@ -32,17 +31,13 @@ services:
         value: "2000"
       - key: DEI_MAX_YEAR
         value: "2026"
-      # Wire CORS_ORIGINS to the frontend service's hostname. Render substitutes
-      # this at deploy time so the two services stay in sync without manual
-      # URL copying. Our backend's _normalize_origin() prepends https:// if
-      # the value is a bare hostname.
+      # Wire CORS_ORIGINS to the frontend service's full hostname.
+      # hostport returns e.g. "dei-downloader-web.onrender.com".
       - key: CORS_ORIGINS
         fromService:
           type: web
           name: dei-downloader-web
-          property: host
-    # Free-tier services sleep after 15 min of inactivity; first request
-    # after sleep takes ~30-60s to cold-start. Acceptable for portfolio use.
+          property: hostport
 
   # ------------------------------------------------------------------
   # Frontend - Vite build served as static files (always free on Render)
@@ -53,22 +48,20 @@ services:
     rootDir: frontend
     buildCommand: npm ci && npm run build
     staticPublishPath: ./dist
-    # SPA routing: any unknown path falls through to index.html so React
-    # handles the routing.
     routes:
       - type: rewrite
         source: /*
         destination: /index.html
     envVars:
-      # VITE_API_BASE is baked into the JS bundle at build time. Our frontend's
-      # resolveApiBase() prepends https:// if the value is a bare hostname.
+      # VITE_API_BASE is baked into the JS bundle at build time.
+      # hostport returns the FULL api hostname (e.g.
+      # "dei-downloader-api.onrender.com"). Using `host` instead returns only
+      # "dei-downloader-api" which produces broken URLs in the browser.
       - key: VITE_API_BASE
         fromService:
           type: web
           name: dei-downloader-api
-          property: host
-    # Cache long-hashed assets aggressively; don't cache index.html so that
-    # deploys are visible to users immediately.
+          property: hostport
     headers:
       - path: /assets/*
         name: Cache-Control
